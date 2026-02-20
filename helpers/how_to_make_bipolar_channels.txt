@@ -1,0 +1,20 @@
+% Run the function function main_channels_map_bipolar = main_channels_map(baseDataDir)
+
+baseDataDir = '/Volumes/MIND/ICE/original_ICE/4_Data_and_Analysis';
+main_channels_map_bipolar = main_channels_map(baseDataDir);
+
+
+Built 6 bipolar main channels for ICE033_IED1
+Built 7 bipolar main channels for ICE033_IED2
+Saved main_channels_map_bipolar.mat with XX keys.
+
+
+load('main_channels_map_bipolar.mat')
+keys(main_channels_map_bipolar)
+main_channels_map_bipolar('ICE033_IED1')
+
+
+later in stage02
+extract_bipolar_fMRI_seedTS_excludeIED( ...
+    subjectID, runID, baseOutDir, baseFMriDir, baseElecDir, ...
+    '/Volumes/MIND/ICE/scripts/IED_marking/main_channels_map_bipolar.mat')
