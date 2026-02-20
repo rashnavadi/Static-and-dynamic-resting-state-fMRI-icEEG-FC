@@ -1,0 +1,274 @@
+function plot_dynamic_FC_columnWise(subjectList, rootDir, runID, pairID, outPng)
+% plot_dynamic_FC
+% Recreates OLD from Kristina "Figure 5" style: dynamic fluctuations of windowed fMRI FC (dashed)
+% vs band-limited icEEG FC (solid) for ONE given connection across time windows.
+%
+% INPUTS
+%   subjectList : string array/cellstr, e.g. ["ICE013","ICE017","ICE045","ICE047"]
+%   rootDir     : directory that contains subject folders with master_dynamicFC.csv
+%                e.g. "/Volumes/MIND/ICE/Tara/Kristina_paper/master_tables"
+%   runID       : run string (exact match), e.g. "Run1a"
+%                (use "" to include all runs, but usually pick one)
+%   pairID      : exact pair_id string, e.g. "DLA1-DLA2--DLH1-DLH2"
+%   outPng      : optional output PNG path ("" to not save)
+%
+% EXAMPLE:
+% subjects = ["ICE013","ICE017","ICE045","ICE047"];
+% subjects = ["ICE060"];
+% subjects = ["ICE017"];
+% subjects = ["ICE044"];
+% subjects = ["ICE024"];
+% subjects = ["ICE057"];
+% subjects = ["ICE046"];
+
+% rootDir  = "/Volumes/MIND/ICE/Tara/Kristina_paper/master_tables";
+% runID    = "Run1";
+% runID    = "Run1a";
+% runID    = "Run2";
+
+% pairID   = "DLA1-DLA2--DLA3-DLA4";
+% pairID   = "DRAIN5-DRAIN6--DRLOF3-DRLOF4";
+% pairID   = "DLOF5-DLOF6--DROF3-DROF4";
+% pairID   = "DLA2-DLA3--DRA7-DRA8";
+% pairID   = "DLAC1-DLAC2--DLPIN5-DLPIN6";
+% pairID   = "DRA1-DRA2--DRAH1-DRAH2";
+% outPng   = fullfile(rootDir,"ICE017_dynamic_example.png");
+% plot_dynamic_FC_columnWise(subjects, rootDir, runID, pairID, outPng);
+
+% Column per subject:
+%   Row 1: fMRI
+%   Row 2-7: EEG bands (delta..high_gamma)
+%
+% This avoids scale mismatch between fMRI and EEG by plotting them separately.
+
+if nargin < 5, outPng = ""; end
+
+bandOrder = ["delta","theta","alpha","beta","low_gamma","high_gamma"];
+bandLabelMap = containers.Map( ...
+    ["delta","theta","alpha","beta","low_gamma","high_gamma"], ...
+    ["\delta","\theta","\alpha","\beta","low \gamma","high \gamma"] );
+
+nSubj = numel(subjectList);
+nBand = numel(bandOrder);
+nRows = 1 + nBand;   % 1 (fMRI) + 6 EEG
+
+% --- fonts ---
+fsTitle = 14;
+fsTick  = 10;
+fsLab   = 12;
+
+% --- read + cache tables ---
+S = struct();
+allFmri = [];
+allEeg  = [];
+allEegByBand = cell(nBand,1);  % optional per-band scaling
+
+for bi = 1:nBand
+    allEegByBand{bi} = [];
+end
+
+for si = 1:nSubj
+    subj = string(subjectList(si));
+    csvPath = fullfile(rootDir, subj, "master_dynamicFC.csv");
+
+    if ~exist(csvPath,"file")
+        warning("[SKIP] Missing: %s", csvPath);
+        S(si).ok = false;
+        continue;
+    end
+
+    T = readtable(csvPath);
+
+    % enforce string columns
+    T.subject_id = string(T.subject_id);
+    T.run_id     = string(T.run_id);
+    T.pair_id    = string(T.pair_id);
+    T.band       = string(T.band);
+
+    % filter
+    T = T(T.subject_id == subj & T.pair_id == string(pairID), :);
+    if strlength(string(runID)) > 0
+        T = T(T.run_id == string(runID), :);
+    end
+
+    if isempty(T)
+        warning("[SKIP] No rows for %s (%s, %s)", subj, runID, pairID);
+        S(si).ok = false;
+        continue;
+    end
+
+    % sort (band then window)
+    T = sortrows(T, {'band','win_idx'});
+
+    S(si).ok   = true;
+    S(si).subj = subj;
+    S(si).T    = T;
+
+    % collect y-values
+    allFmri = [allFmri; T.fmri_fc_windowed];
+
+    allEeg  = [allEeg;  T.eeg_fc_windowed];
+    for bi = 1:nBand
+        Tb = T(T.band == bandOrder(bi), :);
+        allEegByBand{bi} = [allEegByBand{bi}; Tb.eeg_fc_windowed];
+    end
+end
+
+if isempty(allFmri) || isempty(allEeg)
+    error("No data found after filtering. Check runID/pairID and file paths.");
+end
+
+% --- robust y-limits (separate scales) ---
+fmriLim = robust_lim(allFmri);
+eegLim  = robust_lim(allEeg);
+
+% If you prefer per-band EEG scaling, compute these too:
+eegBandLim = cell(nBand,1);
+for bi = 1:nBand
+    if isempty(allEegByBand{bi})
+        eegBandLim{bi} = eegLim;
+    else
+        eegBandLim{bi} = robust_lim(allEegByBand{bi});
+    end
+end
+
+% --- figure: 7 rows (measures) x nSubj columns (subjects) ---
+f = figure("Color","w","Position",[50 50 320*nSubj 260*nRows]);
+
+tl = tiledlayout(f, nRows, nSubj, ...
+    "Padding","loose", "TileSpacing","compact");
+
+sgtitle(f, "Dynamic fluctuations of windowed fMRI FC and band-limited icEEG FC (separate scales)", ...
+    "FontWeight","bold","FontSize",14);
+
+% --- plot each subject column ---
+for si = 1:nSubj
+    % row 1: fMRI
+    ax = nexttile(tl, tile_index(1, si, nRows, nSubj));
+    if ~S(si).ok
+        axis(ax,"off"); 
+        continue;
+    end
+    subj = S(si).subj;
+    T = S(si).T;
+
+    % Pick one band just to get the shared x (all bands share win_idx)
+    % Safer: use first available band for x
+    Tb0 = T(T.band == bandOrder(1), :);
+    x = Tb0.win_idx;
+
+    % fMRI trace for the pair (same for all bands, repeated in your table)
+    % Use Tb0 to avoid duplication issues.
+    y_fmri = Tb0.fmri_fc_windowed;
+
+    plot(ax, x, y_fmri, "--", "LineWidth", 2, "Color", [0.85 0.33 0.10]);
+    style_ax(ax, fmriLim, fsTick);
+    grid(ax,"on");               % <-- add (sometimes it gets reset)
+    ax.GridAlpha = 0.15;
+    ax.XGrid = "on"; ax.YGrid = "on";    
+    if si == 1
+        ylabel(ax, "fMRI FC", "FontWeight","bold","FontSize",fsLab);
+    end
+    title(ax, subj, "FontWeight","bold","FontSize",fsTitle); % subject title at top
+    ax.XTickLabel = []; % keep top panels clean
+    hFmri(si) = plot(ax, x, y_fmri, "--", "LineWidth", 2, "Color", [0.85 0.33 0.10]);
+
+    % rows 2..7: EEG bands
+    for bi = 1:nBand
+        row = 1 + bi; % 2..7
+        ax = nexttile(tl, tile_index(row, si, nRows, nSubj));
+
+        Tb = T(T.band == bandOrder(bi), :);
+        if isempty(Tb)
+            axis(ax,"off"); 
+            continue;
+        end
+
+        x = Tb.win_idx;
+        y_eeg  = Tb.eeg_fc_windowed;
+
+        if bi == 1
+            hEeg(si) = plot(ax, x, y_eeg, "-", "LineWidth", 2, "Color", [0 0.45 0.74]);
+        else
+            plot(ax, x, y_eeg, "-", "LineWidth", 2, "Color", [0 0.45 0.74]);
+        end
+
+%         plot(ax, x, y_eeg, "-", "LineWidth", 2, "Color", [0 0.45 0.74]); % blue
+        % correlation between EEG band and fMRI (computed on matched windows)
+        r = corr(y_eeg, Tb.fmri_fc_windowed, "Rows","complete");
+        txt = sprintf("r = %.2f", r);
+
+        % Use either global EEG scale or per-band scale:
+        usePerBandScale = true;
+        if usePerBandScale
+            style_ax(ax, eegBandLim{bi}, fsTick);
+            yLimHere = eegBandLim{bi};
+        else
+            style_ax(ax, eegLim, fsTick);
+            yLimHere = eegLim;
+        end
+
+        % row labels only on first subject column
+        if si == 1
+            ylabel(ax, bandLabelMap(bandOrder(bi)), ...
+                "Interpreter","tex","FontWeight","bold","FontSize",fsLab);
+        end
+
+        % x-label only on bottom row
+        if row == nRows
+            xlabel(ax, "window", "FontSize",fsLab);
+        else
+            ax.XTickLabel = [];
+        end
+
+        % r text
+        xText = min(x) + 0.05*(max(x)-min(x));
+        yText = yLimHere(2) - 0.12*(yLimHere(2)-yLimHere(1));
+        text(ax, xText, yText, txt, "FontSize",10, "FontWeight","bold");
+    end
+end
+
+% --- one legend for the whole figure (no tile stolen) ---
+idxFmri = find(isgraphics(hFmri), 1);
+idxEeg  = find(isgraphics(hEeg),  1);
+
+lg = legend([hFmri(idxFmri), hEeg(idxEeg)], ...
+            {"fMRI FC","icEEG FC"}, ...
+            "Orientation","horizontal");
+
+lg.Box = "off";
+lg.Location = "southoutside";
+
+
+% save
+if strlength(string(outPng)) > 0
+    exportgraphics(f, outPng, "Resolution", 300);
+    fprintf("[OK] Saved: %s\n", outPng);
+end
+
+end
+
+% ---------------- helpers ----------------
+function lim = robust_lim(y)
+y = y(isfinite(y));
+lo = prctile(y, 2);
+hi = prctile(y, 98);
+pad = 0.10 * (hi - lo);
+if pad == 0, pad = 0.05; end
+lim = [lo-pad, hi+pad];
+end
+
+function style_ax(ax, yLim, fsTick)
+ax.YLim = yLim;
+ax.FontSize = fsTick;
+ax.TickDir = "out";
+grid(ax,"on");
+ax.GridAlpha = 0.15;
+box(ax,"off");
+end
+
+function idx = tile_index(row, col, nRows, nCols)
+% MATLAB tiledlayout fills left-to-right across columns for each row.
+% nexttile can accept a linear index:
+idx = (row-1)*nCols + col;
+end

@@ -1,0 +1,29 @@
+pipeline_ICE033/
+  00_config_ICE033.m
+  01_make_segment_table_ICE033.m
+  02_load_fmri_seedTS_ICE033.m
+  03_load_eeg_and_segment_ICE033.m
+  04_compute_fc_fmri_ICE033.m
+  05_compute_fc_eeg_hilbert_ICE033.m
+  06_export_for_R_ICE033.m
+
+  helpers/
+    parse_segments_row.m
+    find_eeg_bin_file.m
+    load_eeg_bin_with_labels.m       
+    canonical_bipolar_name.m
+    match_bipolar_labels.m
+    bandpass_hilbert_envelope.m
+    uppertri_vec.m
+    sliding_window_indices.m
+
+%%%%%%%%%%%%%%%%%%%%
+run_pipeline_all_subjects.m
+
+for subj = subjects
+   extract_fmri_timeseries(subj)
+   define_segments(subj)
+   compute_eeg_bandpower(subj)
+   compute_fc(subj)
+   export_table(subj)
+end

@@ -1,0 +1,112 @@
+%% written by Tahereh Rashnavadi
+% Jan 2026
+
+%% 03_load_eeg_and_segment_ICE033.m
+% Loads EEG .bin for each run (base Run1/Run2/Run3) and segments it according
+% to TR indices stored in segTable (startTR/endTR are 0-based inclusive).
+%
+% Assumption (validated by you): EEG scan duration matches fMRI run duration
+% (e.g., 1200s == 800 TR * 1.5s).
+%
+% Uses:
+%   find_eeg_bin_file(baseEEGDir, subjectID, baseRun)
+%   load_eeg_bin_with_labels(eeg_bin_path)
+
+clear; clc;
+thisDir = fileparts(mfilename('fullpath'));
+addpath(thisDir);
+
+% ---------- Load config + segTable ----------
+cfgPath = "/Volumes/MIND/ICE/Tara/Kristina_paper/FC_rebuild/ICE035/config_ICE034.mat";
+load(cfgPath, "C");
+
+segPath = fullfile(C.outDir, sprintf("segTable_%s.mat", C.subjectID));
+load(segPath, "segTable");
+
+% ---------- Helpers ----------
+addpath(C.codeDir);
+addpath(fullfile(C.codeDir, "helpers"));
+
+EEG = struct();
+
+for r = 1:height(segTable)
+    runID = string(segTable.RunID(r));
+    runKey = matlab.lang.makeValidName(runID);
+
+    % Map Run1a/Run2a -> Run1/Run2 for EEG file lookup
+    baseRun = regexprep(runID, "[ab]$", "");   % Run1a -> Run1, Run2a -> Run2, Run3 -> Run3
+
+    % Find EEG .bin corresponding to base run (Run2a -> Run2)
+    eegBinPath = find_eeg_bin_file(C.baseEEGDir, C.subjectID, baseRun);
+
+    if ~isfile(eegBinPath)
+        error("EEG .bin not found for %s %s (base %s). Tried: %s", C.subjectID, runID, baseRun, eegBinPath);
+    end
+
+    [eeg_data, fs, labels, ch_map] = load_eeg_bin_with_labels(eegBinPath); % [nChan x nSamp]
+
+    % Segment EEG by TR indices (0-based inclusive)
+    startTR = segTable.startTR(r);
+    endTR   = segTable.endTR(r);
+
+    % ---- NEW: clamp TRs to EEG duration ----
+    nSamp = size(eeg_data, 2);
+    eegDurSec = nSamp / fs;
+
+    % Max endTR allowed (0-based inclusive):
+    % We need (endTR+1)*TR <= eegDurSec  => endTR <= (eegDurSec/TR) - 1
+    maxEndTR = floor(eegDurSec / C.TR) - 1;
+
+    if endTR > maxEndTR
+        warning("[WARN] %s %s endTR=%d exceeds EEG maxEndTR=%d (EEG %.1fs). Clipping.", ...
+            C.subjectID, runID, endTR, maxEndTR, eegDurSec);
+        endTR = maxEndTR;
+    end
+
+    if startTR < 0
+        warning("[WARN] %s %s startTR=%d < 0. Clipping to 0.", C.subjectID, runID, startTR);
+        startTR = 0;
+    end
+
+    if startTR > endTR
+        error("After clipping, startTR > endTR for %s %s (startTR=%d, endTR=%d). Check segTable.", ...
+            C.subjectID, runID, startTR, endTR);
+    end
+
+    % Now convert to seconds (end-exclusive)
+    t0 = startTR * C.TR;
+    t1 = (endTR + 1) * C.TR;   % end-exclusive in seconds
+
+    s0 = floor(t0 * fs) + 1;
+    s1 = floor(t1 * fs);
+
+    % Final clamp safety
+    s0 = max(1, s0);
+    s1 = min(nSamp, s1);
+
+    if s0 > s1
+        error("Invalid sample bounds for %s %s: s0=%d s1=%d (n=%d)", ...
+            C.subjectID, runID, s0, s1, nSamp);
+    end
+
+    if s0 < 1 || s1 > size(eeg_data,2)
+        error("EEG segment out of bounds for %s %s: s0=%d s1=%d (n=%d)", ...
+            C.subjectID, runID, s0, s1, size(eeg_data,2));
+    end
+
+    EEG.(runKey).runID      = runID;
+    EEG.(runKey).baseRun    = baseRun;
+    EEG.(runKey).binPath    = eegBinPath;
+    EEG.(runKey).fs         = fs;
+    EEG.(runKey).labels     = string(labels);
+    EEG.(runKey).ch_map     = ch_map;
+    EEG.(runKey).data_seg   = eeg_data(:, s0:s1);
+    EEG.(runKey).segSamples = [s0 s1];
+    EEG.(runKey).segSec     = [t0 t1];
+
+    fprintf("[OK] %s %s EEG segmented: %.1fs–%.1fs (%d samples)\n", ...
+        C.subjectID, runID, t0, t1, (s1-s0+1));
+end
+
+save(fullfile(C.outDir, sprintf("EEG_segments_%s.mat", C.subjectID)), "EEG", "-v7.3");
+fprintf("[OK] Saved %s\n", fullfile(C.outDir, sprintf("EEG_segments_%s.mat", C.subjectID)));

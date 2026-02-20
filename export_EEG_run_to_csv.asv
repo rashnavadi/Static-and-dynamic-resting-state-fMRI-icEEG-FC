@@ -1,0 +1,67 @@
+% Run it (example):
+% export_EEG_run_to_csv("ICE037","Run1");
+
+function export_EEG_run_to_csv(subjID, runKey)
+% Exports iEEG channel names + FC static matrix per band as labeled CSVs.
+
+rootDir = "/Volumes/MIND/ICE/Tara/Kristina_paper/FC_rebuild";
+subjDir = fullfile(rootDir, subjID);
+eegFile = fullfile(subjDir, "EEG_FC_Hilbert_" + subjID + ".mat");
+load(eegFile, "OUT");
+
+R = OUT.(runKey);
+
+% ---- names (usually OUT.(runKey).labels for EEG) ----
+if isfield(R, "labels")
+    names = string(R.labels);
+elseif isfield(R, "seedNames")
+    names = string(R.seedNames);
+else
+    error("Cannot find EEG channel names in OUT.%s (expected labels or seedNames).", runKey);
+end
+
+% ---- bands present ----
+bands = string(fieldnames(R));
+% keep only known bands if you want (matches your screenshot)
+known = ["delta","theta","alpha","beta","gammalow","gammahigh","low_gamma","high_gamma"];
+bands = intersect(bands, known, 'stable');
+
+if isempty(bands)
+    error("No EEG band structs found in OUT.%s.", runKey);
+end
+
+% ---- output folder ----
+outDir = fullfile(rootDir, "RESULTS_REPRESENTATIVE", "python_inputs", subjID);
+if ~exist(outDir,"dir"), mkdir(outDir); end
+
+% 1) names
+outNames = fullfile(outDir, subjID + "_" + runKey + "_EEG_channelNames.csv");
+writetable(table(names, 'VariableNames', {'channelNames'}), outNames);
+fprintf("[OK] EEG names: %s\n", outNames);
+
+% 2) per-band FC
+for b = 1:numel(bands)
+    B = R.(bands(b));   % band struct
+
+    % pick the static matrix field inside the band struct
+    FC = pickField(B, ["FC_static","FC_static_r","FC_static_z","R_static","R_static_r","R_static_z","r_static"]);
+
+    T = array2table(FC, 'RowNames', cellstr(names), 'VariableNames', cellstr(names));
+    outFC = fullfile(outDir, subjID + "_" + runKey + "_EEG_FC_static_" + bands(b) + "_labeled.csv");
+    writetable(T, outFC, 'WriteRowNames', true);
+    fprintf("[OK] EEG FC (%s): %s\n", bands(b), outFC);
+end
+
+fprintf("[DONE] Exported %d bands for %s %s\n", numel(bands), subjID, runKey);
+end
+
+function A = pickField(S, candidates)
+for k = 1:numel(candidates)
+    f = candidates(k);
+    if isfield(S, f)
+        A = S.(f);
+        return;
+    end
+end
+error("None of the FC fields found. Tried: %s", strjoin(cellstr(candidates), ", "));
+end
